@@ -70,10 +70,35 @@ class SMILESDataset(Dataset):
 
         # convert the smiles to selfies
         if self.vocab.name == "selfies":
-            self.data = [sf.encoder(x)
-                         for x in self.data if sf.encoder(x) is not None]
+            self.data = [self.sf_encoder(x) for x in self.data if self.sf_encoder(x)is not None]
+            # print(">>>WARNING: SELFIES encoding checking is not implemented yet!")
             print("total number of valid SELFIES: ", len(self.data))
-
+    def sf_encoder(self, string):
+        # 尝试直接使用 sf.encoder(x)，如果不行，则进行>>的分割后依次使用sf.encoder(x)再拼接
+        try:
+            return sf.encoder(string)
+        except Exception as e:
+            # 如果直接编码失败，尝试分割字符串
+            try:
+                parts = string.split('^')
+                encoded_parts = []
+                for part in parts:
+                    if ">>" not in part:
+                        encoded_part = sf.encoder(part)
+                    else:
+                        left_single,right_double = part.split('>>')
+                        left_encoded = sf.encoder(left_single,strict=False)
+                        right_encoded = '.'.join([sf.encoder(x,strict=False) for x in right_double.split('.')])
+                        encoded_part = left_encoded + '>>' + right_encoded
+                    if encoded_part is not None:
+                        encoded_parts.append(encoded_part)
+                if encoded_parts:
+                    return '^'.join(encoded_parts)
+                else:
+                    return None
+            except Exception as e:
+                print(f"Error encoding {string}: {e}")
+                return None
     def read_smiles_file(self, path):
         # need to exclude first line which is not SMILES
         with open(path, "r") as f:

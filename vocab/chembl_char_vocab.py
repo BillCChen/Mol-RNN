@@ -53,16 +53,19 @@ def tokenize(smiles, tokens):
 
 
 if __name__ == "__main__":
-    dataset_dir = "../../chembl-data/chembl_28/chembl_28_sqlite/chembl28-cleaned.smi"
-    output_vocab = "./chembl_char_vocab.yaml"
+    # dataset_dir = "../../chembl-data/chembl_28/chembl_28_sqlite/chembl28-cleaned.smi"
+    dataset_dir = "/root/reaction_data/USPTO/uspto_50k_smiles_data.smi"
+    output_vocab = "./uspto_50k_char_vocab.yaml"
 
     atoms = [
         'Al', 'As', 'B', 'Br', 'C', 'Cl', 'F', 'H', 'I', 'K', 'Li', 'N',
+        'Mg','Zn','Cu',
         'Na', 'O', 'P', 'S', 'Se', 'Si', 'Te'
     ]
 
     special = [
         '(', ')', '[', ']', '=', '#', '%', '0', '1', '2', '3', '4', '5',
+        '^','.','*','@','/','\\','>>','&+','&-','&H',
         '6', '7', '8', '9', '+', '-', 'se', 'te', 'c', 'n', 'o', 'p', 's'
     ]
 
