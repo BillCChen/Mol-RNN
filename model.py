@@ -68,7 +68,7 @@ class RNN(torch.nn.Module):
         # the targets will also be packed.
         return embeddings
 
-    def sample(self, batch_size, vocab, device, max_length=140):
+    def sample(self, batch_size, vocab, device, max_length=1000):
         """Use this function if device is GPU"""
         # get integer of "start of sequence"
         start_int = vocab.vocab['<sos>']

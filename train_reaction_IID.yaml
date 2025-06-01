@@ -1,0 +1,26 @@
+---
+ out_dir: './results/run_reaction_0531_IID-jump0/'
+#  dataset_dir: "/root/reaction_data/USPTO/uspto_50k_train_data_0jump.smi" 
+ dataset_dir: /root/reaction_data/USPTO/random_split_USPTO_50k/uspto_50k_train_data_0jump.smi
+ which_vocab: "char" # "selfies", "regex", or "char"
+ vocab_path: "./vocab/uspto_50k_char_vocab.yaml"
+ percentage: 1
+
+ rnn_config:
+  # size of vocab + <eos> + <sos> + <pad> 
+  num_embeddings: 61
+  embedding_dim: 256
+  rnn_type: "LSTM" # LSTM or GRU
+
+  # rnn
+  input_size: 256 # size of the recurrent neural network
+  hidden_size: 512
+  num_layers: 5
+  dropout: 0.1314
+
+ batch_size: 512
+ shuffle: True
+ num_epoch: 1600
+ which_optimizer: adam
+ learning_rate: 0.001
+ weight_decay: 0.0001
