@@ -4,8 +4,9 @@ __pycache__/
 *$py.class
 
 # result file
-results/
-
+result_train/
+result_sample/
+.png
 
 
 # C extensions

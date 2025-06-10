@@ -46,7 +46,7 @@ def dataloader_gen(dataset_dir, percentage, which_vocab, vocab_path,
         batch_size=batch_size, 
         shuffle=shuffle,
         drop_last=drop_last, 
-        collate_fn=pad_collate
+        collate_fn=pad_collate,
     )
 
     return dataloader, len(dataset)

@@ -1,5 +1,5 @@
 ---
- out_dir: './results/run_reaction_0601_OOD-jump1/'
+ out_dir: './result_train/run_reaction_0601_OOD-jump1/'
 #  dataset_dir: "/root/reaction_data/USPTO/uspto_50k_train_data_0jump.smi" 
  dataset_dir: /root/reaction_data/USPTO/OOD_split_USPTO_50k/uspto_50k_train_data_1jump_0-8.smi
  which_vocab: "char" # "selfies", "regex", or "char"
