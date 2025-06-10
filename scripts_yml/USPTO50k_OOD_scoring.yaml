@@ -1,0 +1,42 @@
+# config.yaml
+
+# General settings
+general:
+  seed: 42 # 随机种子，用于复现性
+  device: "cuda" # 训练设备: "cuda" 或 "cpu"
+  log_dir: "logs" # 日志文件保存目录
+  ckpt_dir: "checkpoints" # 模型检查点保存目录
+  project_name: "Molecule_Template_Matching" # 项目名称，用于日志和检查点文件命名
+
+# Data loading settings
+data:
+  base_dir: "/root/reaction_data/USPTO/OOD_split_USPTO_50k"
+  dataset_category: "USPTO50k" # LoadData 类初始化参数，对应 pkl 文件名
+  global_encoding_path: "global_encoding.pkl" # 新增: 预计算编码的字典文件路径
+  batch_size: 64 # DataLoader 的批次大小
+  num_workers: 2 # DataLoader 的工作进程数
+
+# Model architecture settings
+model:
+  ecfp_dim: 1024 # 分子 ECFP 向量的维度
+  drfp_dim: 256 # 模板 DRFP 向量的维度
+  projection_dim: 128 # ECFP 和 DRFP 投影后的维度
+  margin_pos_neg: 0.1 # 对比损失第一部分 (正负样本) 的 margin
+  margin_ranking: 0.05 # 对比损失第二部分 (排序) 的 margin
+
+# Training settings
+train:
+  epochs: 100 # 总训练 epoch 数量
+  learning_rate: 0.001 # 优化器学习率
+  optimizer: "Adam" # 优化器类型: "Adam", "SGD" 等
+  scheduler: "CosineAnnealingLR" # 学习率调度器类型: "CosineAnnealingLR", "StepLR" 等
+  scheduler_params: # 调度器参数，根据选择的调度器调整
+    T_max: 100 # CosineAnnealingLR 的最大迭代次数 (通常为 epochs)
+    # step_size: 30 # StepLR 的步长
+    # gamma: 0.1 # StepLR 的衰减因子
+
+# Logging and checkpointing frequency
+freq:
+  log_interval: 10 # 每隔多少个 batch 打印一次训练信息
+  val_interval: 10 # 每隔多少个 epoch 进行一次验证
+  ckpt_interval: 20 # 每隔多少个 epoch 保存一次模型检查点
