@@ -11,6 +11,7 @@ import os
 import logging
 from datetime import datetime
 import numpy as np # 用于设置随机种子
+from scipy.stats import spearmanr, pearsonr # 导入斯皮尔曼和皮尔逊相关性
 
 class MoleculeDataset(Dataset):
     def __init__(self, smiles_list, templates_list, is_train=True):
@@ -65,7 +66,7 @@ class LoadData:
 
     def _load_dataset(self):
         """
-        根据数据集类别读取对应的pkl文件。 
+        根据数据集类别读取对应的pkl文件。
         pkl文件存储的是一个元组，元组的第一个元素是SMILES列表，第二个元素是逆合成模板列表。
         """
         file_path = f"{self.base_dir}/{self.dataset_category}_templates.pkl"
@@ -191,15 +192,6 @@ class LoadData:
         Returns:
             tuple: 包含 (train_loader, valid_loader) 的元组。
         """
-        # Assuming you want to split the loaded data into train and valid sets
-        # For simplicity, let's say 80% for training and 20% for validation
-        # You might want to adjust this split or load separate train/valid pkls
-        # based on your actual data organization.
-        
-        # Here we'll simulate a split from the loaded data for demonstration.
-        # In a real scenario, you'd likely have separate 'train_dataset.pkl' and 'valid_dataset.pkl'.
-    
-
         train_dataset = MoleculeDataset(self.train_smiles_data, self.train_templates_data, is_train=True)
         valid_dataset = MoleculeDataset(self.valid_smiles_data, self.valid_templates_data, is_train=False)
         # 在这里传入编码字典给 collate_fn 的工厂函数
@@ -223,7 +215,6 @@ class LoadData:
             collate_fn=valid_collate_fn, # 使用闭包生成的 collate_fn
             pin_memory=True
         )
-
 
         return train_loader, valid_loader
 
@@ -259,6 +250,7 @@ class MoleculeTemplateNet(nn.Module):
             nn.Sigmoid()
         )
         self.device = "cpu"
+
     def to(self, device):
         """
         将模型移动到指定设备。
@@ -271,6 +263,7 @@ class MoleculeTemplateNet(nn.Module):
         self.template_encoder.to(device)
         self.predictor.to(device)
         return self
+
     def encode_smiles(self, ecfp_vector):
         """
         将分子的 ECFP 向量编码到低维空间。
@@ -325,12 +318,13 @@ class MoleculeTemplateNet(nn.Module):
         Args:
             smiles_ecfps (torch.Tensor): 批量的分子 ECFP 向量。形状: (batch_size, ecfp_dim)
             all_template_drfps_nested (list of list of torch.Tensor): 批量的模板 DRFP 向量列表。
-                                                                       每个内部列表对应一个分子，包含其采样的模板。
-                                                                       形状: (batch_size, num_sampled_templates, drfp_dim)
+                                                                    每个内部列表对应一个分子，包含其采样的模板。
+                                                                    形状: (batch_size, num_sampled_templates, drfp_dim)
             template_indices_nested (list of list of int): 批量的模板原始序号列表。
-                                                           每个内部列表对应一个分子，包含其采样模板的原始序号。
-                                                           形状: (batch_size, num_sampled_templates)
+                                                          每个内部列表对应一个分子，包含其采样模板的原始序号。
+                                                          形状: (batch_size, num_sampled_templates)
         Returns:
+            tuple: (total_loss, contrast_loss_part1, ranking_loss_part2)
             torch.Tensor: 总对比学习损失。
         """
         batch_size = smiles_ecfps.size(0)
@@ -348,6 +342,12 @@ class MoleculeTemplateNet(nn.Module):
         template_embeddings_flat = self.encode_template(flat_template_drfps.to(self.device)) # (batch_size * num_sampled_templates, projection_dim)
 
         total_loss = 0.0
+        contrast_loss_sum = 0.0
+        ranking_loss_sum = 0.0
+        
+        # Lists to store relevance scores and original indices for correlation calculation
+        all_predicted_scores = []
+        all_original_indices = []
 
         # 遍历批次中的每一个分子作为锚点 (anchor)
         for anchor_idx in range(batch_size):
@@ -371,10 +371,7 @@ class MoleculeTemplateNet(nn.Module):
                 positive_templates_embeddings
             ).squeeze(-1)
 
-
-            # 第一部分损失: 正例分子和负例反应的 sigmoid 值要低于正例分子和正例反应
-            # 这里，所有自身模板为正例，其他分子的所有模板为负例
-            
+            # --- 第一部分损失: 正负例对比损失 ---
             # 收集所有负例模板的嵌入
             # ( (batch_size - 1) * num_sampled_templates, projection_dim )
             negative_templates_embeddings = []
@@ -386,49 +383,55 @@ class MoleculeTemplateNet(nn.Module):
                 ]
                 negative_templates_embeddings.append(neg_templates_embeddings_for_mol)
             
-            negative_templates_embeddings = torch.cat(negative_templates_embeddings, dim=0)
-            
-            # 计算锚点分子与所有负例模板的相关性分数
-            # ( (batch_size - 1) * num_sampled_templates, 1 ) -> ( (batch_size - 1) * num_sampled_templates )
-            negative_scores = self.predict_relevance(
-                anchor_mol_embedding.repeat(negative_templates_embeddings.size(0), 1),
-                negative_templates_embeddings
-            ).squeeze(-1)
-
-            # 计算正负例对比损失 (例如，使用 InfoNCE 损失或 Triplet Loss 变体)
-            # 提示中要求 "正例分子和负例反应的sigmoid 值要低于正例分子和正例反应"
-            # 这可以转化为对每个正例，它相对于所有负例的得分应该更高
-            # 使用一个 max-margin loss: 对于每个正例分数 `s_p` 和每个负例分数 `s_n`
-            # 损失项为 `max(0, s_n - s_p + margin_pos_neg)`
-            
             contrast_loss_part1 = 0.0
-            if negative_scores.numel() > 0: # 确保有负例
+            if len(negative_templates_embeddings) > 0: # 确保有负例
+                negative_templates_embeddings = torch.cat(negative_templates_embeddings, dim=0)
+                
+                # 计算锚点分子与所有负例模板的相关性分数
+                # ( (batch_size - 1) * num_sampled_templates, 1 ) -> ( (batch_size - 1) * num_sampled_templates )
+                negative_scores = self.predict_relevance(
+                    anchor_mol_embedding.repeat(negative_templates_embeddings.size(0), 1),
+                    negative_templates_embeddings
+                ).squeeze(-1)
+
                 for pos_score in positive_scores:
                     contrast_loss_part1 += torch.mean(F.relu(negative_scores - pos_score + margin_pos_neg))
             
-            total_loss += contrast_loss_part1
+            contrast_loss_sum += contrast_loss_part1
 
 
-            # 第二部分损失: 排序损失 - Sigmoid scores 应该与模板序号成比例
-            # (即，序号越低的模板最终得分越低，反之越高)
+            # --- 第二部分损失: 排序损失 ---
             ranking_loss_part2 = 0.0
             if num_sampled_templates > 1:
                 # 根据原始模板序号对正例模板的分数进行排序
-                sorted_pairs = sorted(zip(positive_template_original_indices, positive_scores), key=lambda x: x[0])
+                # 确保 original_indices 和 scores 的对应关系正确
+                # 创建一个包含 (index, score) 元组的列表，然后按 index 排序
+                pairs_for_sorting = []
+                for i in range(num_sampled_templates):
+                    pairs_for_sorting.append((positive_template_original_indices[i], positive_scores[i]))
+                
+                sorted_pairs = sorted(pairs_for_sorting, key=lambda x: x[0])
                 sorted_scores = torch.stack([pair[1] for pair in sorted_pairs])
 
                 # 遍历所有可能的有序对 (k, l)，其中 k 的原始序号小于 l 的原始序号
-                # 我们希望 sorted_scores[k] < sorted_scores[l]
-                # 惩罚项为 max(0, sorted_scores[k] - sorted_scores[l] + ranking_margin)
                 for k_idx in range(num_sampled_templates):
                     for l_idx in range(k_idx + 1, num_sampled_templates):
                         # 确保 sorted_scores[k_idx] 小于 sorted_scores[l_idx]
                         ranking_loss_part2 += F.relu(sorted_scores[k_idx] - sorted_scores[l_idx] + margin_ranking)
             
-            total_loss += ranking_loss_part2
+            ranking_loss_sum += ranking_loss_part2
 
-        # 返回批次平均损失
-        return total_loss / batch_size
+            # --- 收集用于相关性计算的数据（仅在验证阶段需要，但为了统一计算在这里收集） ---
+            # For validation, positive_template_original_indices will contain indices 0 to 6
+            # positive_scores will contain predicted scores for these 7 templates.
+            all_predicted_scores.append(positive_scores.detach().cpu().numpy())
+            all_original_indices.append(np.array(positive_template_original_indices))
+
+
+        total_loss = (contrast_loss_sum + ranking_loss_sum) / batch_size
+        return total_loss, contrast_loss_sum / batch_size, ranking_loss_sum / batch_size, \
+               all_predicted_scores, all_original_indices
+
 # 配置日志
 def setup_logging(log_dir, project_name):
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -456,7 +459,7 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 def main(config_path="scripts_yml/USPTO50k_OOD_scoring.yaml"):
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # 设置可见的 GPU 设备
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1" # 设置可见的 GPU 设备
     # 1. 加载配置
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
@@ -539,6 +542,8 @@ def main(config_path="scripts_yml/USPTO50k_OOD_scoring.yaml"):
         # 训练阶段
         model.train()
         total_train_loss = 0
+        total_train_contrast_loss = 0
+        total_train_ranking_loss = 0
         logger.info(f"\n--- Epoch {epoch}/{epochs} (训练阶段) ---")
         for batch_idx, (smiles_ecfps, all_template_drfps_nested, template_indices_nested) in enumerate(train_loader):
             # 将数据移动到设备
@@ -549,7 +554,7 @@ def main(config_path="scripts_yml/USPTO50k_OOD_scoring.yaml"):
             optimizer.zero_grad()
             
             # 计算损失
-            loss = model.contrastive_loss(
+            loss, contrast_loss, ranking_loss, _, _ = model.contrastive_loss(
                 smiles_ecfps, 
                 all_template_drfps_nested, 
                 template_indices_nested
@@ -559,48 +564,116 @@ def main(config_path="scripts_yml/USPTO50k_OOD_scoring.yaml"):
             optimizer.step()
 
             total_train_loss += loss.item()
+            total_train_contrast_loss += contrast_loss.item()
+            total_train_ranking_loss += ranking_loss.item()
 
             if (batch_idx + 1) % log_interval == 0:
                 avg_batch_loss = total_train_loss / (batch_idx + 1)
-                logger.info(f"  Epoch {epoch}, Batch {batch_idx+1}/{len(train_loader)}, Loss: {avg_batch_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
-                writer.add_scalar('Loss/train_batch', avg_batch_loss, epoch * len(train_loader) + batch_idx)
+                avg_batch_contrast_loss = total_train_contrast_loss / (batch_idx + 1)
+                avg_batch_ranking_loss = total_train_ranking_loss / (batch_idx + 1)
+                logger.info(f"  Epoch {epoch}, Batch {batch_idx+1}/{len(train_loader)}, Total Loss: {avg_batch_loss:.4f}, Contrast Loss: {avg_batch_contrast_loss:.4f}, Ranking Loss: {avg_batch_ranking_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
+                writer.add_scalar('Loss/train_batch_total', avg_batch_loss, epoch * len(train_loader) + batch_idx)
+                writer.add_scalar('Loss/train_batch_contrast', avg_batch_contrast_loss, epoch * len(train_loader) + batch_idx)
+                writer.add_scalar('Loss/train_batch_ranking', avg_batch_ranking_loss, epoch * len(train_loader) + batch_idx)
         
         avg_train_loss_epoch = total_train_loss / len(train_loader)
-        logger.info(f"Epoch {epoch} 训练平均损失: {avg_train_loss_epoch:.4f}")
-        writer.add_scalar('Loss/train_epoch', avg_train_loss_epoch, epoch)
+        avg_train_contrast_loss_epoch = total_train_contrast_loss / len(train_loader)
+        avg_train_ranking_loss_epoch = total_train_ranking_loss / len(train_loader)
+        logger.info(f"Epoch {epoch} 训练平均总损失: {avg_train_loss_epoch:.4f}")
+        logger.info(f"Epoch {epoch} 训练平均对比损失: {avg_train_contrast_loss_epoch:.4f}")
+        logger.info(f"Epoch {epoch} 训练平均排序损失: {avg_train_ranking_loss_epoch:.4f}")
+        writer.add_scalar('Loss/train_epoch_total', avg_train_loss_epoch, epoch)
+        writer.add_scalar('Loss/train_epoch_contrast', avg_train_contrast_loss_epoch, epoch)
+        writer.add_scalar('Loss/train_epoch_ranking', avg_train_ranking_loss_epoch, epoch)
+
 
         if scheduler:
             scheduler.step() # 学习率调度器更新
 
-        # 3. 每10 epoch 进行一次 validation
+        # 验证阶段
         if epoch % val_interval == 0:
             model.eval()
             total_val_loss = 0
+            total_val_contrast_loss = 0
+            total_val_ranking_loss = 0
+            all_spearman_coeffs = []
+            all_pearson_coeffs = []
+
             logger.info(f"--- Epoch {epoch}/{epochs} (验证阶段) ---")
             with torch.no_grad(): # 验证阶段不需要计算梯度
                 for batch_idx_val, (smiles_ecfps_val, all_template_drfps_nested_val, template_indices_nested_val) in enumerate(valid_loader):
                     smiles_ecfps_val = smiles_ecfps_val.to(device)
                     
-                    val_loss = model.contrastive_loss(
+                    val_loss, val_contrast_loss, val_ranking_loss, \
+                    batch_predicted_scores_list, batch_original_indices_list = model.contrastive_loss(
                         smiles_ecfps_val, 
                         all_template_drfps_nested_val, 
                         template_indices_nested_val
                     )
+                    
                     total_val_loss += val_loss.item()
-            
-            avg_val_loss = total_val_loss / len(valid_loader)
-            logger.info(f"Epoch {epoch} 验证平均损失: {avg_val_loss:.4f}")
-            writer.add_scalar('Loss/val_epoch', avg_val_loss, epoch)
+                    total_val_contrast_loss += val_contrast_loss.item()
+                    total_val_ranking_loss += val_ranking_loss.item()
 
-            # 保存最佳模型
+                    # 计算每个分子的相关性
+                    for i in range(len(batch_predicted_scores_list)):
+                        predicted_scores = batch_predicted_scores_list[i]
+                        original_indices = batch_original_indices_list[i]
+                        
+                        # 确保有足够的数据点来计算相关性
+                        if len(predicted_scores) > 1:
+                            # 斯皮尔曼相关性
+                            try:
+                                spearman_corr, _ = spearmanr(original_indices, predicted_scores)
+                                if not np.isnan(spearman_corr):
+                                    all_spearman_coeffs.append(spearman_corr)
+                            except ValueError:
+                                # Handle cases where data might be constant
+                                pass
+                            
+                            # 皮尔逊相关性
+                            try:
+                                pearson_corr, _ = pearsonr(original_indices, predicted_scores)
+                                if not np.isnan(pearson_corr):
+                                    all_pearson_coeffs.append(pearson_corr)
+                            except ValueError:
+                                pass
+
+            avg_val_loss = total_val_loss / len(valid_loader)
+            avg_val_contrast_loss = total_val_contrast_loss / len(valid_loader)
+            avg_val_ranking_loss = total_val_ranking_loss / len(valid_loader)
+            
+            logger.info(f"Epoch {epoch} 验证平均总损失: {avg_val_loss:.4f}")
+            logger.info(f"Epoch {epoch} 验证平均对比损失: {avg_val_contrast_loss:.4f}")
+            logger.info(f"Epoch {epoch} 验证平均排序损失: {avg_val_ranking_loss:.4f}")
+            writer.add_scalar('Loss/val_epoch_total', avg_val_loss, epoch)
+            writer.add_scalar('Loss/val_epoch_contrast', avg_val_contrast_loss, epoch)
+            writer.add_scalar('Loss/val_epoch_ranking', avg_val_ranking_loss, epoch)
+
+            if all_spearman_coeffs:
+                avg_spearman_corr = np.mean(all_spearman_coeffs)
+                logger.info(f"Epoch {epoch} 验证平均斯皮尔曼相关性: {avg_spearman_corr:.4f}")
+                writer.add_scalar('Correlation/val_spearman', avg_spearman_corr, epoch)
+            else:
+                logger.info(f"Epoch {epoch} 验证斯皮尔曼相关性无法计算（数据不足或为常数）。")
+
+            if all_pearson_coeffs:
+                avg_pearson_corr = np.mean(all_pearson_coeffs)
+                logger.info(f"Epoch {epoch} 验证平均皮尔逊相关性: {avg_pearson_corr:.4f}")
+                writer.add_scalar('Correlation/val_pearson', avg_pearson_corr, epoch)
+            else:
+                logger.info(f"Epoch {epoch} 验证皮尔逊相关性无法计算（数据不足或为常数）。")
+
+
+            # 保存最佳模型 (基于总验证损失)
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
-                os.mkdir(os.path.join(writer.log_dir , ckpt_dir),exist_ok=True) # 确保目录存在
+                os.makedirs(os.path.join(writer.log_dir , ckpt_dir),exist_ok=True) # 确保目录存在
                 best_ckpt_path = os.path.join(writer.log_dir , ckpt_dir, f"{project_name}_best.pt")
                 torch.save(model.state_dict(), best_ckpt_path)
-                logger.info(f"  保存最佳模型到: {best_ckpt_path} (验证损失: {best_val_loss:.4f})")
+                logger.info(f"  保存最佳模型到: {best_ckpt_path} (验证总损失: {best_val_loss:.4f})")
 
-        # 2. 把ckpt 每 20 epoch 记录在指定目录下
+        # 每隔 ckpt_interval 个 Epoch 保存一次检查点
         if epoch % ckpt_interval == 0:
             os.makedirs(os.path.join(writer.log_dir , ckpt_dir), exist_ok=True)
             ckpt_path = os.path.join(writer.log_dir , ckpt_dir, f"{project_name}_epoch_{epoch}.pt")
@@ -612,17 +685,5 @@ def main(config_path="scripts_yml/USPTO50k_OOD_scoring.yaml"):
 
 
 if __name__ == "__main__":
-
     # 运行主函数
     main()
-
-    # 清理模拟文件 (可选)
-    # import shutil
-    # if os.path.exists("my_data_category_dataset.pkl"):
-    #     os.remove("my_data_category_dataset.pkl")
-    # if os.path.exists("config.yaml"):
-    #     os.remove("config.yaml")
-    # if os.path.exists("logs"):
-    #     shutil.rmtree("logs")
-    # if os.path.exists("checkpoints"):
-    #     shutil.rmtree("checkpoints")

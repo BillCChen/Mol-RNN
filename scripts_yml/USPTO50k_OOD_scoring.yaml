@@ -4,7 +4,7 @@
 general:
   seed: 42 # 随机种子，用于复现性
   device: "cuda" # 训练设备: "cuda" 或 "cpu"
-  log_dir: "logs" # 日志文件保存目录
+  log_dir: "result_scoring" # 日志文件保存目录
   ckpt_dir: "checkpoints" # 模型检查点保存目录
   project_name: "Molecule_Template_Matching" # 项目名称，用于日志和检查点文件命名
 
@@ -18,15 +18,15 @@ data:
 
 # Model architecture settings
 model:
-  ecfp_dim: 1024 # 分子 ECFP 向量的维度
-  drfp_dim: 256 # 模板 DRFP 向量的维度
+  ecfp_dim: 2048 # 分子 ECFP 向量的维度
+  drfp_dim: 2048 # 模板 DRFP 向量的维度
   projection_dim: 128 # ECFP 和 DRFP 投影后的维度
   margin_pos_neg: 0.1 # 对比损失第一部分 (正负样本) 的 margin
   margin_ranking: 0.05 # 对比损失第二部分 (排序) 的 margin
 
 # Training settings
 train:
-  epochs: 100 # 总训练 epoch 数量
+  epochs: 300 # 总训练 epoch 数量
   learning_rate: 0.001 # 优化器学习率
   optimizer: "Adam" # 优化器类型: "Adam", "SGD" 等
   scheduler: "CosineAnnealingLR" # 学习率调度器类型: "CosineAnnealingLR", "StepLR" 等
@@ -37,6 +37,6 @@ train:
 
 # Logging and checkpointing frequency
 freq:
-  log_interval: 10 # 每隔多少个 batch 打印一次训练信息
+  log_interval: 100 # 每隔多少个 batch 打印一次训练信息
   val_interval: 10 # 每隔多少个 epoch 进行一次验证
-  ckpt_interval: 20 # 每隔多少个 epoch 保存一次模型检查点
+  ckpt_interval: 30 # 每隔多少个 epoch 保存一次模型检查点

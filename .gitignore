@@ -6,6 +6,8 @@ __pycache__/
 # result file
 result_train/
 result_sample/
+result_scoring/
+logs/
 .png
 
 
