@@ -1,6 +1,9 @@
 # Copyright: Wentao Shi, 2021
 import yaml
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '0' 
+
+
 import time
 import torch
 import torch.nn as nn
@@ -17,7 +20,7 @@ from model import RNN
 import sys
 sys.path.append("/root/retro_synthesis/template_analysis")
 from tools.validation_format import check_format
-from tools import get_templates
+from tools import handle_templates
 from tools import result2pdf
 # suppress rdkit error
 from rdkit import rdBase
@@ -88,16 +91,16 @@ def compute_valid_template_rate(reaction_smiles_list):
 
 
 if __name__ == "__main__":
+
     # detect cpu or gpu
     device = torch.device(
         'cuda' if torch.cuda.is_available() else 'cpu'
     )
-    import os
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0'  # force to use cpu
+
     # device = torch.device('cpu')
     print('device: ', device)
 
-    config_dir = "./train_reaction_OOD.yaml"
+    config_dir = "./scripts_yml/USPTO50k_1jump_OOD.yaml"
     with open(config_dir, 'r') as f:
         config = yaml.full_load(f)
 
@@ -224,7 +227,7 @@ if __name__ == "__main__":
         print('train time: {:.2f} seconds'.format(train_end - train_begin))
         # sample 1024 SMILES each epoch
         valid_begin = time.time()
-        sampled_molecules = sample(model, vocab, batch_size=512)
+        sampled_molecules = sample(model, vocab, batch_size=64)
 
         # print the valid rate each epoch
         num_valid, num_invalid , components = compute_valid_template_rate(sampled_molecules)
@@ -237,7 +240,7 @@ if __name__ == "__main__":
         # update the saved model upon best validation loss
         if epoch < 100 and epoch % 5 == 0:
             try:
-                num = min(num_valid, 256)
+                num = min(num_valid, 32)
                 sub_components = components[:num]
                 result2pdf.result_to_img_pdf(sub_components, out_dir + f'epoch_{epoch}_sampled_templates.pdf')
             except Exception as e:
